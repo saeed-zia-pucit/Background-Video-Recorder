@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "600222075842",
+    "project_id": "interval-recorder",
+    "storage_bucket": "interval-recorder.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:600222075842:android:8bac8238ee697fdbaa245b",
+        "android_client_info": {
+          "package_name": "com.example.intervalrecorder"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCyQCBdmxLQBMYG50pDtVxinvQoJLFy-20"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

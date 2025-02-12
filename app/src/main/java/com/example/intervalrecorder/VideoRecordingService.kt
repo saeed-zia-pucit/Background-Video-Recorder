@@ -4,10 +4,14 @@ import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
+import android.media.RingtoneManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
@@ -27,78 +31,99 @@ import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleService
+import com.example.intervalrecorder.data.DataRepository
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.firebase.crashlytics.FirebaseCrashlytics
+import dagger.hilt.android.AndroidEntryPoint
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-
+import javax.inject.Inject
+@AndroidEntryPoint
 class VideoRecordingService : LifecycleService() {
-
+    @Inject
+    lateinit var dataRepository: DataRepository
     private var recording: Recording? = null
     private var isRecording: Boolean = false
     private lateinit var cameraProviderFuture: ListenableFuture<ProcessCameraProvider>
     var isRecordingEnded: Boolean = false
+    private var receiver: BroadcastReceiver? = null
+    val filter = IntentFilter("com.example.snippets.ACTION_UPDATE_DATA")
+    private val uiUpdateReceiver: BroadcastReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (intent.hasExtra("ACTION_ID")) {
+                startRecording(context)
+            }
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
-        cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        ContextCompat.registerReceiver(
+            this,
+            uiUpdateReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+
+        CoroutineScope(Dispatchers.Main).launch {
+            dataRepository.dataFlow.collect { data ->
+                toggleRecording(data)
+            }
+        }
     }
 
-    fun startAndStopRecordingAtGivenTimes(startTime: Long, endTime: Long) {
-        val handler = Handler(Looper.getMainLooper())
-
-        // Calculate the delay for starting and stopping the recording
-        val currentTime = System.currentTimeMillis()
-        val startDelay = startTime - currentTime
-        val endDelay = endTime - currentTime
-
-        // Schedule the startRecording function
-        handler.postDelayed({
-            startRecording(this)
-        }, startDelay)
-
-        // Schedule the stopRecording function
-        handler.postDelayed({
-            stopRecording()
-        }, endDelay)
-    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         val action = intent?.getStringExtra("ACTION") ?: ""
-        var notificationTitle = "Recording scheduled"
+        var notificationTitle = "Video Recorder"
+        val handler = Handler(Looper.getMainLooper())
 
+        notificationTitle = when (action) {
+            "START_RECORDING" -> {
+                "Recording in progress"
+            }
+
+            "STOP_RECORDING" -> {
+                "Recording stopped"
+            }
+
+            else -> {
+                "Ready to Record"
+            }
+        }
+        if (isRecording)
+            notificationTitle = "Recording in Progress"
         startForeground(1, createNotification(notificationTitle))
+        toggleRecording(action)
+        return START_STICKY
+    }
 
+    private fun toggleRecording(action: String) {
         when (action) {
             "START_RECORDING" -> {
-                notificationTitle = "Recording in progress"
-               // startRecording(this)
-                Toast.makeText(this, "Please wait a moment", Toast.LENGTH_SHORT).show()
+                cameraProviderFuture = ProcessCameraProvider.getInstance(this)
 
+                startRecording(this)
+
+                //    Toast.makeText(this, "Service Start Recording called", Toast.LENGTH_LONG).show()
                 Log.d("UserFlow", "onStartCommand: START_RECORDING")
-
-                val startTime = intent?.getLongExtra("startTime",0L)
-                val endTime = intent?.getLongExtra("endTime",0L)
-                startAndStopRecordingAtGivenTimes(startTime?:0L,endTime?:0L)
 
             }
 
             "STOP_RECORDING" -> {
                 Log.d("UserFlow", "onStartCommand: STOP_RECORDING")
+                //  Toast.makeText(this, "Service Stop Recording called", Toast.LENGTH_LONG).show()
 
                 stopRecording()
             }
         }
 
-        return START_STICKY
     }
-
-
 
     private fun startRecording(context: Context) {
         // Check necessary permissions
@@ -111,129 +136,165 @@ class VideoRecordingService : LifecycleService() {
                 Manifest.permission.RECORD_AUDIO
             ) != PackageManager.PERMISSION_GRANTED
         ) {
-            Log.e("VideoRecordingService", "Permissions not granted for camera or audio recording")
+            Log.e("UserFlow", "Permissions not granted for camera or audio recording")
             return
         }
 
         // Use a Coroutine to perform camera setup and media recording in the background
         CoroutineScope(Dispatchers.IO).launch {
-            cameraProviderFuture.addListener({
-                try {
-                    val cameraProvider = cameraProviderFuture.get()
-                    cameraProvider.unbindAll()  // Unbind any previous use cases
+            cameraProviderFuture.addListener(
+                {
+                    try {
+                        val cameraProvider = cameraProviderFuture.get()
+                        cameraProvider.unbindAll()  // Unbind any previous use cases
 
-                    val recorder = Recorder.Builder()
-                        .setQualitySelector(QualitySelector.from(Quality.SD))
-                        .build()
+                        val recorder = Recorder.Builder()
+                            .setQualitySelector(QualitySelector.from(Quality.SD))
+                            .build()
 
-                    val videoCapture = VideoCapture.withOutput(recorder)
-                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                        val videoCapture = VideoCapture.withOutput(recorder)
+                        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-                    // Bind camera and video capture
-                    cameraProvider.bindToLifecycle(this@VideoRecordingService, cameraSelector, videoCapture)
-
-                    // Prepare output file for recording
-                    val contentValues = ContentValues().apply {
-                        put(
-                            MediaStore.MediaColumns.DISPLAY_NAME,
-                            "VID_${SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())}"
+                        // Bind camera and video capture
+                        cameraProvider.bindToLifecycle(
+                            this@VideoRecordingService,
+                            cameraSelector,
+                            videoCapture
                         )
-                        put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
-                    }
 
-                    val outputOptions = MediaStoreOutputOptions.Builder(
-                        contentResolver,
-                        MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-                    )
-                        .setContentValues(contentValues)
-                        .build()
+                        // Prepare output file for recording
+                        val contentValues = ContentValues().apply {
+                            put(
+                                MediaStore.MediaColumns.DISPLAY_NAME,
+                                "VID_${
+                                    SimpleDateFormat(
+                                        "yyyyMMdd_HHmmss",
+                                        Locale.US
+                                    ).format(Date())
+                                }"
+                            )
+                            put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                        }
 
-                    // Start recording in the background
-                    recording = videoCapture.output.prepareRecording(this@VideoRecordingService, outputOptions)
-                        .withAudioEnabled()
-                        .start(ContextCompat.getMainExecutor(this@VideoRecordingService)) { event ->
-                            // Switch to the main thread for UI updates
-                            when (event) {
-                                is VideoRecordEvent.Start -> {
-                                    isRecording = true
-                                    // Update UI on the main thread
-                                    launch(Dispatchers.Main) {
-                                        Log.d("VideoRecordingService", "Recording started")
-                                        Toast.makeText(context, "Recording started", Toast.LENGTH_SHORT).show()
+                        val outputOptions = MediaStoreOutputOptions.Builder(
+                            contentResolver,
+                            MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+                        )
+                            .setContentValues(contentValues)
+                            .build()
+
+                        // Start recording in the background
+                        recording = videoCapture.output.prepareRecording(
+                            this@VideoRecordingService,
+                            outputOptions
+                        )
+                            .withAudioEnabled()
+                            .start(ContextCompat.getMainExecutor(this@VideoRecordingService)) { event ->
+                                // Switch to the main thread for UI updates
+                                when (event) {
+                                    is VideoRecordEvent.Start -> {
+                                        isRecording = true
+                                        // Update UI on the main thread
+//                                    launch(Dispatchers.Main) {
+                                        Log.d("UserFlow", "Recording started")
+                                        Toast.makeText(
+                                            context,
+                                            "Recording started",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+//                                    }
                                     }
-                                }
 
-                                is VideoRecordEvent.Finalize -> {
-                                    isRecording = false
-                                    launch(Dispatchers.Main) {
+                                    is VideoRecordEvent.Finalize -> {
+                                        isRecording = false
+//                                    launch(Dispatchers.Main) {
                                         if (event.hasError()) {
-                                            Toast.makeText(context, "Error finalizing recording", Toast.LENGTH_SHORT).show()
-                                            Log.e("VideoRecordingService", "Error finalizing recording: ${event.error}")
+                                            Toast.makeText(
+                                                context,
+                                                "Error finalizing recording",
+                                                Toast.LENGTH_SHORT
+                                            ).show()
+                                            Log.e(
+                                                "UserFlow",
+                                                "Error finalizing recording: ${event.error}"
+                                            )
                                             FirebaseCrashlytics.getInstance().recordException(
-                                                event.cause ?: Exception("CustomException:VideoRecordEvent.Finalize" + event.error)
+                                                event.cause
+                                                    ?: Exception("CustomException:VideoRecordEvent.Finalize" + event.error)
                                             )
                                         } else {
-                                            Log.d("VideoRecordingService", "Recording finalized successfully")
+                                            Log.d("UserFlow", "Recording finalized successfully")
                                         }
+                                        cameraProvider.unbindAll()
                                     }
+//                                }
                                 }
                             }
-                        }
-                } catch (e: Exception) {
-                    launch(Dispatchers.Main) {
+                    } catch (e: Exception) {
+//                    launch(Dispatchers.Main) {
                         Toast.makeText(context, "Error Exception", Toast.LENGTH_SHORT).show()
-                        Log.e("VideoRecordingService", "Error starting recording: ${e.message}")
+                        Log.e("UserFlow", "Error starting recording: ${e.message}")
                         FirebaseCrashlytics.getInstance().recordException(e)
+//                    }
                     }
-                }
-            }, ContextCompat.getMainExecutor(this@VideoRecordingService)) // Running the listener on the main thread to handle camera provider future
+                },
+                ContextCompat.getMainExecutor(this@VideoRecordingService)
+            ) // Running the listener on the main thread to handle camera provider future
         }
     }
 
-
-
-
-    fun clearScheduledTimes(context: Context) {
-        val sharedPreferences = context.getSharedPreferences("SchedulePrefs", Context.MODE_PRIVATE)
-        sharedPreferences.edit()
-            .remove("startTime")
-            .remove("stopTime")
-            .apply()
-    }
     private fun stopRecording() {
         if (recording != null && isRecording) {
-            recording?.stop()
-            recording?.close()
-            isRecording = false
-            Log.d("VideoRecordingService", "Recording stopped")
+            try {
+                recording?.stop() // Stop recording properly
+                recording?.close() // Fully release MediaRecorder
+                recording = null // Set to null to avoid memory leaks
+                isRecording = false
+                cameraProviderFuture.cancel(true)
+                Log.d("UserFlow", "Recording stopped and released")
+            } catch (e: Exception) {
+                Log.e("UserFlow", "Error stopping MediaRecorder: ${e.message}")
+            }
         } else {
-            Log.d("VideoRecordingService", "No active recording to stop")
+            Log.d("UserFlow", "No active recording to stop")
         }
-
-        clearScheduledTimes(this)
-        // Stop the service and remove foreground notification
-        stopForeground(STOP_FOREGROUND_REMOVE)
-        stopSelf()
     }
+
 
     private fun createNotification(contentText: String): Notification {
         val channelId = "VideoRecordingChannel"
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val channel = NotificationChannel(
                 channelId,
                 "Video Recording",
-                NotificationManager.IMPORTANCE_LOW
-            )
+                NotificationManager.IMPORTANCE_HIGH // Set to HIGH for visibility
+            ).apply {
+//                enableVibration(true)
+//                enableLights(true)
+//                vibrationPattern = longArrayOf(0, 500, 1000) // Custom vibration
+            }
+
             val notificationManager =
                 getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             notificationManager.createNotificationChannel(channel)
         }
 
+        // Full-Screen Intent to make notification pop up
+        val fullScreenIntent = Intent(this, MainActivity::class.java)
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            this, 0, fullScreenIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
         return NotificationCompat.Builder(this, channelId)
             .setContentTitle("Video Recorder")
             .setContentText(contentText)
             .setSmallIcon(R.drawable.baseline_assistant_navigation_24)  // Use your own icon
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_HIGH) // HIGH priority for Pre-Oreo
+            .setDefaults(Notification.DEFAULT_ALL)  // Enable sound & vibration
+            .setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)) // Play sound
+            .setFullScreenIntent(fullScreenPendingIntent, true) // Force pop-up
             .build()
     }
 
@@ -244,5 +305,8 @@ class VideoRecordingService : LifecycleService() {
         recording?.close()
         val cameraProvider = cameraProviderFuture.get()
         cameraProvider.unbindAll()
+        this.unregisterReceiver(uiUpdateReceiver)
     }
+
+
 }

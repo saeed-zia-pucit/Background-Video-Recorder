@@ -2,26 +2,31 @@ package com.example.intervalrecorder
 
 import android.Manifest
 import android.app.AlarmManager
-import android.app.AlertDialog
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
-import android.content.pm.PackageManager
-import android.os.Build
-import android.provider.Settings
 import android.util.Log
 import android.widget.Toast
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.material3.Button
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import androidx.core.content.ContextCompat.startActivities
-import androidx.core.content.ContextCompat.startActivity
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkRequest
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
 import java.util.concurrent.TimeUnit
 
@@ -51,6 +56,12 @@ object Utils {
         }
     }
 
+    fun generateRandomString(length: Int): String {
+        val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"
+        return (1..length)
+            .map { chars.random() }
+            .joinToString("")
+    }
 
     fun scheduleRecordingUsingWorkManager(context: Context, startMillis: Long, stopMillis: Long) {
         // Calculate the delay from now to the start time
@@ -84,21 +95,28 @@ object Utils {
     }
 
 
-    suspend fun scheduleRecording(context: Context, startMillis: Long, stopMillis: Long) {
+    fun scheduleRecording(
+        context: Context,
+        startMillis: Long,
+        stopMillis: Long,
+        startId: Int,
+        stopId: Int
+    ) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
         // Schedule Start Recording
         val startIntent = Intent(context, AlarmReceiver::class.java).apply {
             putExtra("ACTION", "START_RECORDING")
+            putExtra("id", startId)
         }
         val startPendingIntent = PendingIntent.getBroadcast(
             context,
-            0,
+            startId,
             startIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        alarmManager.setExactAndAllowWhileIdle(
+        alarmManager.setExact(
             AlarmManager.RTC_WAKEUP,
             startMillis,
             startPendingIntent
@@ -107,10 +125,11 @@ object Utils {
         // Schedule Stop Recording
         val stopIntent = Intent(context, AlarmReceiver::class.java).apply {
             putExtra("ACTION", "STOP_RECORDING")
+            putExtra("id", stopId)
         }
         val stopPendingIntent = PendingIntent.getBroadcast(
             context,
-            1,
+            stopId,
             stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -125,26 +144,22 @@ object Utils {
 //        Toast.makeText(context, "Recording scheduled!", Toast.LENGTH_SHORT).show()
     }
 
-    fun cancelScheduledRecording(context: Context) {
+    fun cancelScheduledRecording(context: Context, startId: Int, stopId: Int) {
         val alarmManager = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
 
-        val startIntent = Intent(context, AlarmReceiver::class.java).apply {
-            putExtra("ACTION", "START_RECORDING")
-        }
+        val startIntent = Intent(context, AlarmReceiver::class.java)
         val startPendingIntent = PendingIntent.getBroadcast(
             context,
-            0,
+            startId,
             startIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         alarmManager.cancel(startPendingIntent)
 
-        val stopIntent = Intent(context, AlarmReceiver::class.java).apply {
-            putExtra("ACTION", "STOP_RECORDING")
-        }
+        val stopIntent = Intent(context, AlarmReceiver::class.java)
         val stopPendingIntent = PendingIntent.getBroadcast(
             context,
-            1,
+            stopId,
             stopIntent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -197,4 +212,47 @@ object Utils {
         }
     }
 
+}
+
+
+@Composable
+fun ScheduledView(scheduledStart: Long, scheduledStop: Long, onCancel: () -> Unit) {
+    val startFormatted = remember(scheduledStart) {
+        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(scheduledStart))
+    }
+    val stopFormatted = remember(scheduledStop) {
+        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(scheduledStop))
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(16.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text("Scheduled Recording", style = MaterialTheme.typography.bodyMedium)
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Text("Start Time: $startFormatted")
+        Spacer(modifier = Modifier.height(8.dp))
+        Text("Stop Time: $stopFormatted")
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        Button(onClick = onCancel) {
+            Text("Cancel Scheduled Recording")
+        }
+    }
+
+
+}
+
+fun clearScheduledTimes(context: Context) {
+    val sharedPreferences = context.getSharedPreferences("SchedulePrefs", Context.MODE_PRIVATE)
+    sharedPreferences.edit()
+        .remove("startTime")
+        .remove("stopTime")
+        .apply()
 }

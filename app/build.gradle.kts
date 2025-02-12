@@ -4,6 +4,8 @@ plugins {
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.firebase.crashlytics)
     alias(libs.plugins.google.services)
+    alias(libs.plugins.ksp)
+    id("com.google.dagger.hilt.android")
 }
 
 android {
@@ -14,8 +16,8 @@ android {
         applicationId = "com.example.intervalrecorder"
         minSdk = 28
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.2"
+        versionCode = 5
+        versionName = "1.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
@@ -51,15 +53,8 @@ dependencies {
     implementation("io.github.farimarwat:anrspy:1.3") {
         exclude(group = "com.google.guava", module = "listenablefuture")
     }
-    implementation("com.google.guava:guava:31.1-android")
-//    implementation ("androidx.camera:camera-camera2:1.4.1")
+    implementation(libs.guava)
 
-//
-//    implementation (libs.androidx.camera.core.v141)
-//    implementation (libs.androidx.camera.lifecycle.v141)
-//    implementation (libs.androidx.camera.video.v141)
-//    implementation (libs.androidx.camera.view.v141)
-    //
     implementation(libs.androidx.fragment)
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -71,6 +66,19 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.androidx.lifecycle.service)
     implementation(libs.androidx.work.runtime.ktx)
+//    implementation (libs.androidx.lifecycle.viewmodel.compose)
+    implementation (libs.androidx.navigation.compose)
+
+    implementation (libs.androidx.room.runtime)  // Latest Room version
+    ksp(libs.androidx.room.compiler)     // Kotlin Annotation Processor (kapt)
+    implementation (libs.androidx.room.ktx)
+    implementation (libs.kotlinx.coroutines.android)
+
+    implementation("androidx.hilt:hilt-navigation-compose:1.2.0")
+    implementation("com.google.dagger:hilt-android:2.51.1")
+    ksp("com.google.dagger:hilt-compiler:2.55")
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
     androidTestImplementation(libs.androidx.espresso.core)

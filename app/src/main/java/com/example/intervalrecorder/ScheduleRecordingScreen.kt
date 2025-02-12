@@ -7,12 +7,21 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -21,140 +30,127 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.navigation.NavController
 import com.example.intervalrecorder.Utils.cancelScheduledRecording
-import com.example.intervalrecorder.Utils.clearScheduledTimes
-import com.example.intervalrecorder.Utils.getScheduledTimes
-import com.example.intervalrecorder.Utils.isRecordingScheduled
 import com.example.intervalrecorder.Utils.parseDateTimeToMillis
-import com.example.intervalrecorder.Utils.saveScheduledTimes
 import com.example.intervalrecorder.Utils.scheduleRecording
-import com.example.intervalrecorder.Utils.scheduleRecordingUsingWorkManager
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.text.SimpleDateFormat
+import com.example.intervalrecorder.data.Schedule
 import java.util.Calendar
-import java.util.Date
-import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ScheduleRecordingScreen(modifier: Modifier = Modifier) {
+fun ScheduleRecordingScreen(
+    navController: NavController,
+    viewModel: ScheduleViewModel = hiltViewModel()
+) {
     val context = LocalContext.current
-    val isScheduled by remember { mutableStateOf(isRecordingScheduled(context)) }
-    val (scheduledStart, scheduledStop) = getScheduledTimes(context)
+    Scaffold(
+        topBar = {
+            TopAppBar(
+                title = {
+                    Text(
+                        "Add new Schedule",
+                        modifier = Modifier.fillMaxWidth(),
+                        textAlign = TextAlign.Center
+                    )
+                },
+                colors = TopAppBarDefaults.centerAlignedTopAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.primary // Correct background color for Material 3
+                ),
+                navigationIcon = {
+                    IconButton(onClick = {
+                        // Navigate back to the previous screen
+                        navController.popBackStack()
+                    }) {
+                        Icon(Icons.Default.ArrowBack, contentDescription = "Back")
+                    }
+                },
+            )
+        },
 
-    if ( scheduledStart != null && scheduledStop != null) {
-        // Show Scheduled View
-        ScheduledView(
-            scheduledStart = scheduledStart,
-            scheduledStop = scheduledStop,
-            onCancel = {
-                val stopIntent = Intent(context, VideoRecordingService::class.java).apply {
-                    putExtra("ACTION", "STOP_RECORDING")
-                }
-                context.startForegroundService(stopIntent)
+        content = { paddingValues ->
+            FreshView(modifier = Modifier.padding(paddingValues),
+                onSchedule = { startDate, startTime, stopTime, dayName ->
 
-               // cancelScheduledRecording(context)
-                clearScheduledTimes(context)
-                Toast.makeText(context, "Recording schedule canceled!", Toast.LENGTH_SHORT).show()
-            }
-        )
-    } else {
-        // Show Fresh View
-        FreshView(
-            onSchedule = { startTime, stopTime ->
+                    val startMillis = parseDateTimeToMillis(startDate, startTime)
+                    val stopMillis = parseDateTimeToMillis(startDate, stopTime)
+                    val startId = System.currentTimeMillis().toInt()
+                    val stopId = startId + 1
+                    if (startMillis != null && stopMillis != null && startMillis < stopMillis) {
 
-                CoroutineScope(Dispatchers.Main).launch {
-                    withContext(Dispatchers.IO) {
-                        // Save scheduled times (move disk I/O off the main thread)
-                        saveScheduledTimes(context, startTime, stopTime)
+                        scheduleRecording(context, startMillis, stopMillis, startId, stopId)
 
-                        // Schedule alarms
-                       // scheduleRecording(context, startTime, stopTime)
+                        viewModel.insertSchedule(
+                            Schedule(
+                                0,
+                                dayName,
+                                startTime,
+                                stopTime,
+                                startId,
+                                stopId,
+                            )
+                        )
+                        Toast.makeText(context, "Recording Scheduled", Toast.LENGTH_SHORT).show()
+                        navController.popBackStack()
+
+                    } else {
+                        Toast.makeText(context, "Invalid date or time", Toast.LENGTH_SHORT).show()
                     }
 
-                    // Start the foreground service
+                }, refreshAll = {
                     val stopIntent = Intent(context, VideoRecordingService::class.java).apply {
-                        putExtra("startTime", startTime)
-                        putExtra("endTime", stopTime)
-                        putExtra("ACTION", "START_RECORDING")
-
+                        putExtra("ACTION", "STOP_RECORDING")
                     }
                     context.startForegroundService(stopIntent)
-                }
-            }, onCancel = {
-                val stopIntent = Intent(context, VideoRecordingService::class.java).apply {
-                    putExtra("ACTION", "STOP_RECORDING")
-                }
-                context.startForegroundService(stopIntent)
 
-               // cancelScheduledRecording(context)
-                clearScheduledTimes(context)
-                Toast.makeText(context, "Recording schedule canceled!", Toast.LENGTH_SHORT).show()
+                    viewModel.schedules.value.forEach { schedule ->
+                        cancelScheduledRecording(context, schedule.startId, schedule.stopId)
+                        viewModel.deleteSchedule(schedule.id)
+                    }
+                    Toast.makeText(context, "Recording schedule canceled!", Toast.LENGTH_SHORT)
+                        .show()
+                    navController.popBackStack()
 
-            }
-        )
-    }
+                }
+            )
+        })
 }
 
-@Composable
-fun ScheduledView(scheduledStart: Long, scheduledStop: Long, onCancel: () -> Unit) {
-    val startFormatted = remember(scheduledStart) {
-        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(scheduledStart))
-    }
-    val stopFormatted = remember(scheduledStop) {
-        SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(scheduledStop))
-    }
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally
-    ) {
-        Text("Scheduled Recording", style = MaterialTheme.typography.bodyMedium)
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Text("Start Time: $startFormatted")
-        Spacer(modifier = Modifier.height(8.dp))
-        Text("Stop Time: $stopFormatted")
-
-        Spacer(modifier = Modifier.height(16.dp))
-
-        Button(onClick = onCancel) {
-            Text("Cancel Scheduled Recording")
-        }
-    }
-}
 
 @Composable
-fun FreshView(onSchedule: (startTime: Long, stopTime: Long,) -> Unit,onCancel: () -> Unit) {
+fun FreshView(
+    modifier: Modifier,
+    onSchedule: (startDate: String, startTime: String, stopDate: String, stopTime: String) -> Unit,
+    refreshAll: () -> Unit
+) {
     val context = LocalContext.current
     val calendar = Calendar.getInstance()
     var startDate by remember { mutableStateOf("") }
     var startTime by remember { mutableStateOf("") }
-    var stopDate by remember { mutableStateOf("") }
     var stopTime by remember { mutableStateOf("") }
+    var dayName by remember { mutableStateOf("") }
 
+// Show DatePickerDialog
     val startDatePicker = android.app.DatePickerDialog(
         context,
         { _, year, month, dayOfMonth ->
-            startDate = String.format("%04d-%02d-%02d", year, month + 1, dayOfMonth)
-        },
-        calendar.get(Calendar.YEAR),
-        calendar.get(Calendar.MONTH),
-        calendar.get(Calendar.DAY_OF_MONTH)
-    )
+            // After date is selected, calculate the day of the week
+            calendar.set(year, month, dayOfMonth)
+            val dayOfWeek = calendar.get(Calendar.DAY_OF_WEEK)
 
-    val stopDatePicker = android.app.DatePickerDialog(
-        context,
-        { _, year, month, dayOfMonth ->
-            stopDate = String.format("%04d-%02d-%02d", year, month + 1, dayOfMonth)
+            // Convert the day of week (1 = Sunday, 7 = Saturday) to the actual day name
+            val daysOfWeek = arrayOf(
+                "Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
+            )
+
+            dayName = daysOfWeek[dayOfWeek - 1] // Adjust for 1-based indexing
+
+            // Format the selected date (yyyy-MM-dd) and display the day of the week
+            startDate = String.format("%04d-%02d-%02d", year, month + 1, dayOfMonth)
+            println("Selected date: $startDate, Day of the week: $dayName")
         },
         calendar.get(Calendar.YEAR),
         calendar.get(Calendar.MONTH),
@@ -178,19 +174,19 @@ fun FreshView(onSchedule: (startTime: Long, stopTime: Long,) -> Unit,onCancel: (
         },
         calendar.get(Calendar.HOUR_OF_DAY),
         calendar.get(Calendar.MINUTE),
+
         false
     )
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxSize()
-            .padding(16.dp),
-        verticalArrangement = Arrangement.Center,
+            .padding(30.dp)
+            .statusBarsPadding(),
+        verticalArrangement = Arrangement.Top,
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text("Schedule Video Recording", style = MaterialTheme.typography.bodyMedium)
 
-        Spacer(modifier = Modifier.height(16.dp))
 
         Button(onClick = { startDatePicker.show() }) {
             Text(if (startDate.isEmpty()) "Select Start Date" else "Start Date: $startDate")
@@ -204,12 +200,6 @@ fun FreshView(onSchedule: (startTime: Long, stopTime: Long,) -> Unit,onCancel: (
 
         Spacer(modifier = Modifier.height(16.dp))
 
-        Button(onClick = { stopDatePicker.show() }) {
-            Text(if (stopDate.isEmpty()) "Select Stop Date" else "Stop Date: $stopDate")
-        }
-
-        Spacer(modifier = Modifier.height(16.dp))
-
         Button(onClick = { stopTimePicker.show() }) {
             Text(if (stopTime.isEmpty()) "Select Stop Time" else "Stop Time: $stopTime")
         }
@@ -217,24 +207,19 @@ fun FreshView(onSchedule: (startTime: Long, stopTime: Long,) -> Unit,onCancel: (
         Spacer(modifier = Modifier.height(25.dp))
 
         Button(onClick = {
-            val startMillis = parseDateTimeToMillis(startDate, startTime)
-            val stopMillis = parseDateTimeToMillis(stopDate, stopTime)
 
-            if (startMillis != null && stopMillis != null && startMillis < stopMillis) {
-                onSchedule(startMillis, stopMillis)
-            } else {
-                Toast.makeText(context, "Invalid date or time", Toast.LENGTH_SHORT).show()
-            }
+            onSchedule(startDate, startTime, stopTime, dayName)
         }) {
             Text("Schedule")
         }
+        Spacer(modifier = Modifier.weight(1f))
+        Button(modifier = Modifier.fillMaxWidth(), onClick = {
 
-        Spacer(modifier = Modifier.height(40.dp))
-        Button(onClick = {
-
+            refreshAll()
         }) {
             Text("Refresh All")
         }
+
     }
 }
 
